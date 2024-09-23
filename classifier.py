@@ -71,7 +71,7 @@ for epoch in range(epochs):  # loop over the dataset multiple times
         inputs, labels = data[0], data[1]
 
         outputs = model(inputs)
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels.unsqueeze(0))
 
         optimizer.zero_grad()
         loss.backward()
@@ -79,10 +79,10 @@ for epoch in range(epochs):  # loop over the dataset multiple times
 
         running_loss += loss.item()
         if idx % 2000 == 1999:  # print every 2000 mini-batches
-            print(f"[{epoch + 1}, {idx + 1:5d}] loss: {running_loss / 2000:.3f}")
+            print(f"\nEpoch [{epoch + 1}/{epochs}], Step [{idx + 1:5d}/{len(dataset)}] loss: {running_loss / 2000:.3f}")
             running_loss = 0.0
 
     # Save the model
-    torch.save(model.state_dict(), "cifar_net.pth")
+    torch.save(model.state_dict(), f"models/E{epoch + 1}_B{1}.pth")
 
 print("Finished Training")
