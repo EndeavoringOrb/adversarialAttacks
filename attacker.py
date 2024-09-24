@@ -9,35 +9,39 @@ import random
 from tqdm import tqdm
 import numpy as np
 import torchvision.transforms.v2 as transforms
-import math
+from classifier import CNN
 
-epochs = 100
-batchSize = 8192
+epochs = 1000000
+batchSize = 2**14
+maxDist = 10.0 / 255.0
+distType = 1
 
 
 # Define the CNN architecture
-class CNN(nn.Module):
+class ImageAttacker(nn.Module):
     def __init__(self):
-        super(CNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 16, 3)
-        self.conv2 = nn.Conv2d(16, 32, 3)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(32 * 5 * 5, 64)
-        self.fc2 = nn.Linear(64, 32)
-        self.fc3 = nn.Linear(32, 10)
+        super(ImageAttacker, self).__init__()
+        data = torch.normal(0, 0.02, (28, 28))
+        self.weights = nn.Parameter(data)
+
+    @torch.no_grad()
+    def preCompute(self, maxDist, distType):
+        if distType == 1:
+            self.weights[self.weights < -maxDist] = -maxDist
+            self.weights[self.weights > maxDist] = maxDist
+        elif distType == 2:
+            weiNorm = self.weights.norm()
+            if weiNorm > maxDist:
+                normalizeVal = maxDist / weiNorm
+                self.weights *= normalizeVal
 
     def forward(self, x):
-        x = self.pool(F.tanh(self.conv1(x)))
-        x = self.pool(F.tanh(self.conv2(x)))
-        x = x.view(-1, 32 * 5 * 5)
-        x = F.tanh(self.fc1(x))
-        x = F.tanh(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        return x + self.weights
 
 
 def main():
     # Load and preprocess the data
+    print(f"Batch Size: {batchSize:,}")
     splits = {
         "train": "train-00000-of-00001.parquet",
         "test": "test-00000-of-00001.parquet",
@@ -57,17 +61,15 @@ def main():
 
     # Initialize the network
     print("Initializing model")
-    model = CNN()
+    model = ImageAttacker()
+    classifierModel: CNN = torch.load("models/classifier.pt", weights_only=False)
+    for p in classifierModel.parameters():
+        p.requires_grad_(False)
 
     # Define loss function and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     print(f"Model has {sum([p.numel() for p in model.parameters()]):,} parameters")
-
-    # Init tracker stuff
-    batchesPerEpoch = math.ceil(
-        (len(dataset) / batchSize) + (1 if len(dataset) % batchSize > 0 else 0)
-    )
 
     # Train the network
     print("Training")
@@ -80,8 +82,10 @@ def main():
             labels.append(data[1])
 
             if len(inputs) == batchSize or idx == len(dataset) - 1:
-                outputs = model(torch.stack(inputs, 0))
-                loss = criterion(outputs, torch.stack(labels, 0))
+                model.preCompute(maxDist, distType)
+                newInputs = model(torch.stack(inputs, 0))
+                outputs = classifierModel(newInputs)
+                loss = -criterion(outputs, torch.stack(labels, 0))
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -95,7 +99,8 @@ def main():
                 labels = []
 
         # Save the model
-        torch.save(model, f"models/classifier.pt")
+        model.preCompute(maxDist, distType)
+        torch.save(model, f"models/attacker.pt")
 
     print("Finished Training")
 
