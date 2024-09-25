@@ -1,72 +1,32 @@
 import torch
+import random
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
-from PIL import Image
-import pandas as pd
-import io
-import random
-from tqdm import tqdm
-import numpy as np
-import torchvision.transforms.v2 as transforms
-from classifier import CNN
 
-epochs = 1000000
-batchSize = 2**14
-maxDist = 10.0 / 255.0
-distType = 1
+from models import CNN, ImageAttacker
+from data import loadDataset
 
-
-# Define the CNN architecture
-class ImageAttacker(nn.Module):
-    def __init__(self):
-        super(ImageAttacker, self).__init__()
-        data = torch.normal(0, 0.02, (28, 28))
-        self.weights = nn.Parameter(data)
-
-    @torch.no_grad()
-    def preCompute(self, maxDist, distType):
-        if distType == 1:
-            self.weights[self.weights < -maxDist] = -maxDist
-            self.weights[self.weights > maxDist] = maxDist
-        elif distType == 2:
-            weiNorm = self.weights.norm()
-            if weiNorm > maxDist:
-                normalizeVal = maxDist / weiNorm
-                self.weights *= normalizeVal
-
-    def forward(self, x):
-        return x + self.weights
+epochs = 1000
+batchSize = 16384
+maxDist = 2
+distType = 2
 
 
 def main():
-    # Load and preprocess the data
-    print(f"Batch Size: {batchSize:,}")
-    splits = {
-        "train": "train-00000-of-00001.parquet",
-        "test": "test-00000-of-00001.parquet",
-    }
-    df = pd.read_parquet("mnist/" + splits["train"])
-    tensor_image = transforms.PILToTensor()
+    # Ask which model to test
+    modelType = input("Train against better classifier? [y/n]: ").lower() == "y"
 
-    dataset = []
-    for idx, data in tqdm(df.iterrows(), desc="Loading data", total=len(df)):
-        dataset.append(
-            (
-                tensor_image(Image.open(io.BytesIO(data["image"]["bytes"])))
-                * (1.0 / 255.0),
-                torch.tensor(data["label"], dtype=torch.int64),
-            )
-        )
+    # Load data
+    dataset = loadDataset("train")
 
-    # Initialize the network
+    # Init network
     print("Initializing model")
     model = ImageAttacker()
-    classifierModel: CNN = torch.load("models/classifier.pt", weights_only=False)
-    for p in classifierModel.parameters():
+    classifierModel: CNN = torch.load(f"models/{'betterClassifier' if modelType else 'classifier'}.pt", weights_only=False)
+    for p in classifierModel.parameters():  # Freeze classifier model
         p.requires_grad_(False)
 
-    # Define loss function and optimizer
+    # Init loss function and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     print(f"Model has {sum([p.numel() for p in model.parameters()]):,} parameters")
@@ -85,7 +45,7 @@ def main():
                 model.preCompute(maxDist, distType)
                 newInputs = model(torch.stack(inputs, 0))
                 outputs = classifierModel(newInputs)
-                loss = -criterion(outputs, torch.stack(labels, 0))
+                loss = -criterion(outputs, torch.stack(labels, 0)) # Negative loss
 
                 optimizer.zero_grad()
                 loss.backward()

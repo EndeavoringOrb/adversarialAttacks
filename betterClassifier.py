@@ -1,42 +1,20 @@
 import torch
+import random
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
-from PIL import Image
-import pandas as pd
-import io
-import random
-from tqdm import tqdm
-import numpy as np
-import torchvision.transforms.v2 as transforms
-import math
 
-from classifier import CNN
-from attacker import ImageAttacker
+from data import loadDataset
+from models import CNN, ImageAttacker
 
 epochs = 1000
 batchSize = 4096
-maxDist = 10
+maxDist = 10.0 / 255.0
+distType = 1
 
 
 def main():
-    # Load and preprocess the data
-    splits = {
-        "train": "train-00000-of-00001.parquet",
-        "test": "test-00000-of-00001.parquet",
-    }
-    df = pd.read_parquet("mnist/" + splits["train"])
-    tensor_image = transforms.PILToTensor()
-
-    dataset = []
-    for idx, data in tqdm(df.iterrows(), desc="Loading data", total=len(df)):
-        dataset.append(
-            (
-                tensor_image(Image.open(io.BytesIO(data["image"]["bytes"])))
-                * (1.0 / 255.0),
-                torch.tensor(data["label"], dtype=torch.int64),
-            )
-        )
+    # Load data
+    dataset = loadDataset("train")
 
     # Initialize the network
     print("Initializing model")
@@ -65,7 +43,7 @@ def main():
             labels.append(data[1])
 
             if len(inputs) == batchSize or idx == len(dataset) - 1:
-                attackerModel.preCompute(maxDist)
+                attackerModel.preCompute(maxDist, distType)
                 newInputs = attackerModel(torch.stack(inputs, 0))
                 outputs = classifierModel(newInputs)
                 atkLoss = -criterion(outputs, torch.stack(labels, 0))
@@ -74,7 +52,7 @@ def main():
                 atkLoss.backward()
                 optimAttacker.step()
 
-                attackerModel.preCompute(maxDist)
+                attackerModel.preCompute(maxDist, distType)
                 with torch.no_grad():
                     newInputs = attackerModel(torch.stack(inputs, 0))
                 outputs = classifierModel(newInputs)
